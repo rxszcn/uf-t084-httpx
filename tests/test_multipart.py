@@ -442,7 +442,7 @@ def test_multipart_rewinds_files():
 class TestHeaderParamHTML5Formatting:
     def test_unicode(self):
         filename = "n\u00e4me"
-        expected = b'filename="n\xc3\xa4me"'
+        expected = b"filename*=utf-8''n%C3%A4me"
         files = {"upload": (filename, b"<file content>")}
         request = httpx.Request("GET", "https://www.example.com", files=files)
         assert expected in request.read()
@@ -467,3 +467,95 @@ class TestHeaderParamHTML5Formatting:
         files = {"upload": (filename, b"<file content>")}
         request = httpx.Request("GET", "https://www.example.com", files=files)
         assert expected in request.read()
+
+
+class TestFileParamRFC7578Encoding:
+    def test_multipart_encode_non_ascii_filename(self) -> None:
+        """
+        Non-ASCII filenames use the RFC 7578 `filename*` extended encoding.
+        """
+        url = "https://www.example.com/"
+        headers = {"Content-Type": "multipart/form-data; boundary=BOUNDARY"}
+        files = {"file": ("采集报告.txt", io.BytesIO(b"<file content>"))}
+
+        request = httpx.Request("POST", url, headers=headers, data={}, files=files)
+        request.read()
+
+        assert request.headers == {
+            "Host": "www.example.com",
+            "Content-Type": "multipart/form-data; boundary=BOUNDARY",
+            "Content-Length": str(len(request.content)),
+        }
+        assert request.content == (
+            b"--BOUNDARY\r\n"
+            b'Content-Disposition: form-data; name="file"; '
+            b"filename*=utf-8''%E9%87%87%E9%9B%86%E6%8A%A5%E5%91%8A.txt\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"<file content>\r\n"
+            b"--BOUNDARY--\r\n"
+        )
+
+    def test_multipart_encode_ascii_filename_keeps_simple_form(self) -> None:
+        """
+        ASCII filenames keep the simple `filename="..."` form, byte-for-byte.
+        """
+        url = "https://www.example.com/"
+        headers = {"Content-Type": "multipart/form-data; boundary=BOUNDARY"}
+        files = {"file": ("report.txt", io.BytesIO(b"<file content>"))}
+
+        request = httpx.Request("POST", url, headers=headers, data={}, files=files)
+        request.read()
+
+        assert request.content == (
+            b"--BOUNDARY\r\n"
+            b'Content-Disposition: form-data; name="file"; filename="report.txt"\r\n'
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"<file content>\r\n"
+            b"--BOUNDARY--\r\n"
+        )
+
+    def test_multipart_encode_ascii_filename_with_crlf_is_escaped(self) -> None:
+        """
+        Dangerous characters such as CR/LF in ASCII filenames keep the
+        existing percent-escape behaviour within the simple form.
+        """
+        url = "https://www.example.com/"
+        headers = {"Content-Type": "multipart/form-data; boundary=BOUNDARY"}
+        files = {"file": ("na\r\nme.txt", io.BytesIO(b"<file content>"))}
+
+        request = httpx.Request("POST", url, headers=headers, data={}, files=files)
+        request.read()
+
+        assert request.content == (
+            b"--BOUNDARY\r\n"
+            b'Content-Disposition: form-data; name="file"; '
+            b'filename="na%0D%0Ame.txt"\r\n'
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"<file content>\r\n"
+            b"--BOUNDARY--\r\n"
+        )
+
+    def test_multipart_encode_non_ascii_filename_with_crlf(self) -> None:
+        """
+        Dangerous characters in non-ASCII filenames are percent-encoded
+        within the RFC 7578 extended form.
+        """
+        url = "https://www.example.com/"
+        headers = {"Content-Type": "multipart/form-data; boundary=BOUNDARY"}
+        files = {"file": ("报\r\n告.txt", io.BytesIO(b"<file content>"))}
+
+        request = httpx.Request("POST", url, headers=headers, data={}, files=files)
+        request.read()
+
+        assert request.content == (
+            b"--BOUNDARY\r\n"
+            b'Content-Disposition: form-data; name="file"; '
+            b"filename*=utf-8''%E6%8A%A5%0D%0A%E5%91%8A.txt\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"\r\n"
+            b"<file content>\r\n"
+            b"--BOUNDARY--\r\n"
+        )

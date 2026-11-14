@@ -6,6 +6,7 @@ import os
 import re
 import typing
 from pathlib import Path
+from urllib.parse import quote
 
 from ._types import (
     AsyncByteStream,
@@ -40,6 +41,21 @@ def _format_form_param(name: str, value: str) -> bytes:
 
     value = _HTML5_FORM_ENCODING_RE.sub(replacer, value)
     return f'{name}="{value}"'.encode()
+
+
+def _format_file_param(filename: str) -> bytes:
+    """
+    Encode a filename parameter within a multipart form.
+
+    Non-ASCII filenames use the RFC 7578 `filename*` extended encoding,
+    which is the interoperable form across services. ASCII filenames keep
+    the simple `filename="..."` form, byte-for-byte.
+    """
+    if filename.isascii():
+        return _format_form_param("filename", filename)
+
+    value = quote(filename, safe="")
+    return f"filename*=utf-8''{value}".encode("ascii")
 
 
 def _guess_content_type(filename: str | None) -> str | None:
@@ -190,7 +206,7 @@ class FileField:
                 _format_form_param("name", self.name),
             ]
             if self.filename:
-                filename = _format_form_param("filename", self.filename)
+                filename = _format_file_param(self.filename)
                 parts.extend([b"; ", filename])
             for header_name, header_value in self.headers.items():
                 key, val = f"\r\n{header_name}: ".encode(), header_value.encode()
